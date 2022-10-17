@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "lab1"
+		},
+		{
+			"path": "trialfuncs"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"shared_data.h": "c",
+			"compfuncs.h": "c",
+			"stdbool.h": "c"
+		}
+	}
+}
