@@ -1,28 +1,67 @@
 #include <stdio.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <trialfuncs.h>
 
+#include "shared_data.h"
+
 int main(int argc, char **argv)
 {
-    // if (argc != 3)
-    // {
-    //     fprintf(stdout, "Usage: %s <f or g> <function>\n", argv[0]);
-    //     return 1;
-    // }
+    if (argc != 3)
+    {
+        fprintf(stdout, "Usage: %s <f or g> <function>\n", argv[0]);
+        return 1;
+    }
 
-    // if (strcmp(""))
+    computation_node node = NODES_COUNT; // Unknown node type
+
+    if (strcmp("f", argv[1]) == 0)
+    {
+        node = F_NODE;
+    }
+    else if (strcmp("g", argv[1]) == 0)
+    {
+        node = G_NODE;
+    }
+    else
+    {
+        fprintf(stderr, "Invalid node type - %s\n", argv[1]);
+        return 1;
+    }
 
     // input formats
 
-    // listen for input
-    // calculate
-    // send result
-
-    for (int i = 0; i < 20; i++)
+    int input_fd = open(node_pipe[node], O_RDWR);
+    if (input_fd == -1)
     {
-        PROCESS_FUNC(g, or, i);
+        fprintf(stderr, "Failed to open named pipe - %s\n", node_pipe[node]);
+        return 1;
     }
+
+    // listen for input
+    char buff[1024];
+    while (1)
+    {
+        // Blocking Input-Output operation
+        int retval = read(input_fd, buff, 1024);
+        if (retval == -1)
+        {
+            printf("NODE %d: Data error\n", node);
+            return 1;
+        }
+        printf("NODE %d: Data ready - %d\n", node, retval);
+
+        // calculate
+
+        // send result
+    }
+
+    // for (int i = 0; i < 20; i++)
+    // {
+    //     PROCESS_FUNC(g, or, i);
+    // }
 
     // compfunc_status_t status;
     // double fresult;
@@ -46,4 +85,6 @@ int main(int argc, char **argv)
     // PROCESS_FUNC(g, or, -1);
     // PROCESS_FUNC(g, or, 0);
     // PROCESS_FUNC(g, imin, 0);
+
+    return 0;
 }

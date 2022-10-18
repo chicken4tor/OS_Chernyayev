@@ -20,7 +20,7 @@ int main(int argc, char **argv)
 
     signal(SIGINT, handle_interrupt);
 
-    manager_state_t *mgr = construct_manager(STDIN_FILENO, COMM_BUFFER);
+    manager_state_t *mgr = construct_manager(STDIN_FILENO, COMM_BUFFER, "imul", "imin");
 
     // create named pipes
     // spawn processes

@@ -24,8 +24,8 @@ typedef union _value value_t;
 
 typedef enum _computation_node computation_node;
 
-const char *node_pipe[NODES_COUNT];
+extern const char *node_pipe[NODES_COUNT];
 
-const char *calc_task;
+extern const char *calc_task;
 
 #endif // __SHARED_DATA_INC__
