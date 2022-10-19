@@ -6,6 +6,7 @@ add_subdirectory("../trialfuncs" "trialfuncs")
 
 # Support library
 add_library(eraha shared_data.c)
+target_include_directories(eraha PRIVATE "../trialfuncs/include")
 
 # Manager
 add_executable(manager main.c manager.c)

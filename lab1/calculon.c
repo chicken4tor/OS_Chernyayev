@@ -2,6 +2,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include <trialfuncs.h>
 
@@ -31,31 +32,119 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    trial_function_t tf = function_from_name(argv[2]);
+
+    if (tf == TF_UNKNOWN)
+    {
+        fprintf(stderr, "Unknown trial function - %s\n", argv[2]);
+        return 1;
+    }
+
     // input formats
 
-    int input_fd = open(node_pipe[node], O_RDWR);
-    if (input_fd == -1)
+    int comm_fd = open(node_pipe[node][0], O_CREAT|O_RDWR);
+    if (comm_fd == -1)
     {
-        fprintf(stderr, "Failed to open named pipe - %s\n", node_pipe[node]);
+        fprintf(stderr, "Failed to open input named pipe - %s\n", node_pipe[node][0]);
+        return 1;
+    }
+
+    int result_fd = open(node_pipe[node][1], O_CREAT|O_RDWR);
+    if (result_fd == -1)
+    {
+        fprintf(stderr, "Failed to open result named pipe - %s\n", node_pipe[node][1]);
         return 1;
     }
 
     // listen for input
-    char buff[1024];
+    int buff[256];
     while (1)
     {
         // Blocking Input-Output operation
-        int retval = read(input_fd, buff, 1024);
+        int retval = read(comm_fd, buff, sizeof(buff));
         if (retval == -1)
         {
             printf("NODE %d: Data error\n", node);
             return 1;
         }
-        printf("NODE %d: Data ready - %d\n", node, retval);
+        else if (retval == 0)
+        {
+            // Nothing to read, finish process
+            return 0;
+        }
 
-        // calculate
+        printf("NODE %d: Data ready - %d, X - ", node, retval);
 
-        // send result
+        // Process all input values, even if we read more than one integer from named pipe
+        for (int i = 0; i < retval / sizeof(int); i++)
+        {
+            int x = buff[i];
+
+            printf("%d ", x);
+
+            // calculate
+            value_t result;
+
+            tf_result_t result_type;
+
+            switch (node)
+            {
+            case F_NODE:
+                switch (tf)
+                {
+                case TF_IMUL:
+                    result.status = trial_f_imul(x, &result.i_val);
+                    break;
+                case TF_IMIN:
+                    result.status = trial_f_imin(x, &result.i_val);
+                    break;
+                case TF_FMUL:
+                    result.status = trial_f_fmul(x, &result.d_val);
+                    break;
+                case TF_AND:
+                    result.status = trial_f_and(x, &result.b_val);
+                    break;
+                case TF_OR:
+                    result.status = trial_f_or(x, &result.b_val);
+                    break;
+                }
+                break;
+            case G_NODE:
+                switch (tf)
+                {
+                case TF_IMUL:
+                    result.status = trial_g_imul(x, &result.i_val);
+                    break;
+                case TF_IMIN:
+                    result.status = trial_g_imin(x, &result.i_val);
+                    break;
+                case TF_FMUL:
+                    result.status = trial_g_fmul(x, &result.d_val);
+                    break;
+                case TF_AND:
+                    result.status = trial_g_and(x, &result.b_val);
+                    break;
+                case TF_OR:
+                    result.status = trial_g_or(x, &result.b_val);
+                    break;
+                }
+                break;
+            }
+
+            // send result
+            int w_result = write(result_fd, &result, sizeof(result));
+            if (w_result == -1 || w_result != sizeof(result))
+            {
+                // Error, or data write is incomplete
+                fprintf(stderr, "NODE %d: Data write error (%d)\n", node, w_result);
+                return 1;
+            }
+            fsync(result_fd);
+        }
+
+        printf("\n");
+
+        sleep(1);
     }
 
     // for (int i = 0; i < 20; i++)

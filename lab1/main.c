@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <signal.h>
-
-#include <unistd.h> // @todo Use nanosleep in productin code
+#include <sys/select.h>
+#include <unistd.h>
 
 #include "manager.h"
 
@@ -36,17 +36,54 @@ int main(int argc, char **argv)
         // Handle cancellation signal
         if (cultural_canceling)
         {
-            printf("Good bye, cruel world\n");
+            cultural_canceling = false;
 
-            // perform cleanup...
-            destruct_manager(mgr);
+            bool canceling_confirmed = false;
 
-            return 0;
+            printf("Please confirm that computation should be stopped y(es, stop)/n(ot yet)[n]\n");
+
+            fd_set input_streams;
+
+            FD_ZERO(&input_streams);
+
+            FD_SET(STDIN_FILENO, &input_streams);
+
+            struct timeval io_timeout;
+
+            io_timeout.tv_sec = 5;
+            io_timeout.tv_usec = 0;
+
+            int sel_result = select(1, &input_streams, NULL, NULL, &io_timeout);
+
+            if (sel_result == 1)
+            {
+                char buff[50];
+
+                int retval = read(STDIN_FILENO, buff, sizeof(buff));
+
+                if (retval == 2)
+                {
+                    if (buff[0] == 'y' || buff[0] == 'Y')
+                    {
+                        canceling_confirmed = true;
+                    }
+                }
+            }
+
+            if (!canceling_confirmed)
+            {
+                printf("action is not confirmed within 5 seconds. proceeding...\n");
+            }
+            else
+            {
+                // perform cleanup...
+                destruct_manager(mgr);
+
+                return 0;
+            }
         }
 
         communicate(mgr);
-
-        sleep(1);
     }
 
     // Unreachable branch

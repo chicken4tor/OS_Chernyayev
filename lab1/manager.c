@@ -13,12 +13,12 @@
 #include "manager.h"
 #include "shared_data.h"
 
-const int NAMED_PIPE_MODE = 0666;
+const int NAMED_PIPE_MODE = S_IFIFO | 0640;
 const int READ_BUFF = 1024;
 
 struct _input_value
 {
-    long value;
+    int value;
     compfunc_status_t g_status;
     compfunc_status_t f_status;
 };
@@ -37,6 +37,7 @@ struct _manager_state
 {
     pid_t comp_nodes[NODES_COUNT];                         /// Reference to processes for computation
     int comm_fd[NODES_COUNT + 1];                          /// File descriptors for communication channels, extra space for input stream
+    int results_fd[NODES_COUNT];                           /// File descriptors for results communication channels, extra space for input stream
     int max_count;                                         /// Size of communication buffers
     input_value_t *x_values;                               /// Input queue
     int x_start_pos;                                       /// Index of head element in circular input queue
@@ -52,8 +53,10 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
     manager_state_t *mgr = malloc(sizeof(manager_state_t));
 
     // Create named pipes
-    mkfifo(node_pipe[F_NODE], NAMED_PIPE_MODE);
-    mkfifo(node_pipe[G_NODE], NAMED_PIPE_MODE);
+    mkfifo(node_pipe[F_NODE][0], NAMED_PIPE_MODE);
+    mkfifo(node_pipe[F_NODE][1], NAMED_PIPE_MODE);
+    mkfifo(node_pipe[G_NODE][0], NAMED_PIPE_MODE);
+    mkfifo(node_pipe[G_NODE][1], NAMED_PIPE_MODE);
 
     // Allocate buffers
     mgr->max_count = buffer_size;
@@ -68,14 +71,7 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
         mgr->intermediate_free_pos[i] = 0;
     }
 
-    // Open file descriptors
-    for (int i = 0; i < NODES_COUNT; i++)
-    {
-        mgr->comm_fd[i] = open(node_pipe[i], O_RDWR);
-    }
-    mgr->comm_fd[NODES_COUNT] = input_fd;
-
-    // Launch computation processes
+    // Launch computation processes, at first
     int status;
     char *args[] = {
         calc_task,
@@ -86,7 +82,7 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
     status = posix_spawn(&mgr->comp_nodes[F_NODE], calc_task, NULL, NULL, args, NULL);
     if (status != 0)
     {
-        printf("Start 1 failed\n");
+        printf("f node - failed\n");
     }
 
     args[1] = "g";
@@ -95,7 +91,31 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
     status = posix_spawn(&mgr->comp_nodes[G_NODE], calc_task, NULL, NULL, args, NULL);
     if (status != 0)
     {
-        printf("Start 2 failed\n");
+        printf("g node - failed\n");
+    }
+
+    // Open file descriptors
+    for (int i = 0; i < NODES_COUNT; i++)
+    {
+        mgr->comm_fd[i] = open(node_pipe[i][0], O_RDWR);
+        if (mgr->comm_fd[i] == -1)
+        {
+            fprintf(stderr, "manager: Named pipe open failed %s\n", node_pipe[i][0]);
+            /// @todo Cleanup partially constructed object
+            return NULL;
+        }
+    }
+    mgr->comm_fd[NODES_COUNT] = input_fd;
+
+    for (int i = 0; i < NODES_COUNT; i++)
+    {
+        mgr->results_fd[i] = open(node_pipe[i][1], O_RDWR);
+        if (mgr->results_fd[i] == -1)
+        {
+            fprintf(stderr, "manager: Results named pipe open failed %s\n", node_pipe[i][1]);
+            /// @todo Cleanup partially constructed object
+            return NULL;
+        }
     }
 
     return mgr;
@@ -104,7 +124,6 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
 void destruct_manager(manager_state_t *mgr)
 {
     /// @todo Sync computation queues
-    ;
 
     // Free buffers
     free(mgr->x_values);
@@ -118,6 +137,8 @@ void destruct_manager(manager_state_t *mgr)
     for (int i = 0; i < NODES_COUNT; i++)
     {
         close(mgr->comm_fd[i]);
+        remove(node_pipe[i][0]);
+        remove(node_pipe[i][1]);
     }
 
     free(mgr);
@@ -125,29 +146,28 @@ void destruct_manager(manager_state_t *mgr)
 
 bool communicate(manager_state_t *mgr)
 {
-    fd_set input_stream;
-    fd_set results_stream;
+    fd_set data_streams;
 
     // Input set
-    FD_ZERO(&input_stream);
-    FD_SET(mgr->comm_fd[NODES_COUNT], &input_stream);
+    FD_ZERO(&data_streams);
 
-    // Results set
-    FD_ZERO(&results_stream);
-
+    // results data streams
     for (int i = 0; i < NODES_COUNT; i++)
     {
-        FD_SET(mgr->comm_fd[i], &results_stream);
+        FD_SET(mgr->results_fd[i], &data_streams);
     }
+
+    // X values
+    FD_SET(mgr->comm_fd[NODES_COUNT], &data_streams);
 
     int sel_result;
 
     struct timeval io_timeout;
 
-    io_timeout.tv_sec = 30;
-    io_timeout.tv_usec = 0; // 500000 == .5 sec interval
+    io_timeout.tv_sec = 0;
+    io_timeout.tv_usec = 500000; // .5 sec interval
 
-    sel_result = select(NODES_COUNT, &input_stream, &results_stream, NULL, &io_timeout);
+    sel_result = select(NODES_COUNT + 1, &data_streams, NULL, NULL, &io_timeout);
 
     if (sel_result == -1)
     {
@@ -160,18 +180,10 @@ bool communicate(manager_state_t *mgr)
         return true;
     }
 
-    // Get calculated results
-    for (int i = 0; i < NODES_COUNT; i++)
-    {
-        if (FD_ISSET(mgr->comm_fd[i], &results_stream))
-        {
-            char buff[READ_BUFF];
-            ssize_t result = read(mgr->comm_fd[i], buff, sizeof(buff));
-        }
-    }
+    printf("manager: select - %d\n", sel_result);
 
     // Get input value, and send it to sub-processes
-    if (FD_ISSET(mgr->comm_fd[NODES_COUNT], &input_stream))
+    if (FD_ISSET(mgr->comm_fd[NODES_COUNT], &data_streams))
     {
         // Assumption: Data is read by lines, one X value per line
         char buff[READ_BUFF + 1]; // Extra char for zero string termination
@@ -192,7 +204,7 @@ bool communicate(manager_state_t *mgr)
             // Send X to calculators
             input_value_t x;
 
-            x.value = value;
+            x.value = (int)value;
             x.f_status = COMPFUNC_STATUS_MAX;
             x.f_status = COMPFUNC_STATUS_MAX;
 
@@ -209,6 +221,17 @@ bool communicate(manager_state_t *mgr)
             // Add value to queue
             mgr->x_values[mgr->x_free_pos] = x;
             mgr->x_free_pos = (mgr->x_free_pos + 1) % mgr->max_count;
+        }
+    }
+
+    // Get calculated results
+    for (int i = 0; i < NODES_COUNT; i++)
+    {
+        if (FD_ISSET(mgr->results_fd[i], &data_streams))
+        {
+            char buff[READ_BUFF];
+            ssize_t result = read(mgr->results_fd[i], buff, sizeof(buff));
+            printf("read from %d, %ld\n", i, result);
         }
     }
 
