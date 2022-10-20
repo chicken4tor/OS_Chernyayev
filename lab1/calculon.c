@@ -42,14 +42,14 @@ int main(int argc, char **argv)
 
     // input formats
 
-    int comm_fd = open(node_pipe[node][0], O_CREAT|O_RDWR);
+    int comm_fd = open(node_pipe[node][0], O_RDONLY);
     if (comm_fd == -1)
     {
         fprintf(stderr, "Failed to open input named pipe - %s\n", node_pipe[node][0]);
         return 1;
     }
 
-    int result_fd = open(node_pipe[node][1], O_CREAT|O_RDWR);
+    int result_fd = open(node_pipe[node][1], O_WRONLY);
     if (result_fd == -1)
     {
         fprintf(stderr, "Failed to open result named pipe - %s\n", node_pipe[node][1]);
@@ -139,7 +139,6 @@ int main(int argc, char **argv)
                 fprintf(stderr, "NODE %d: Data write error (%d)\n", node, w_result);
                 return 1;
             }
-            fsync(result_fd);
         }
 
         printf("\n");

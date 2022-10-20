@@ -10,3 +10,11 @@ Use C, processes and named pipes to communicate function results. Use select sys
 
 * manager
 * calculon
+
+## RTFM
+
+````
+man 7 pipe
+man 7 fifo
+man 2 select
+````
