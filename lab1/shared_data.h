@@ -14,7 +14,7 @@ enum _computation_node
 
 struct _value
 {
-    compfunc_status_t status; /// Calculation status
+    compfunc_status_t status; // Calculation status
 
     /// @brief Shared memory for specific value types
     union
@@ -52,6 +52,7 @@ enum _tf_result
 {
     TFR_UNKNOWN = -1,
     TFR_INT,
+    TFR_UINT,
     TFR_FLOAT,
     TFR_BOOL
 };
@@ -62,6 +63,11 @@ typedef enum _tf_result tf_result_t;
 /// @param tf Trial function name
 /// @return Trial function numerical id
 trial_function_t function_from_name(const char *tf);
+
+/// @brief Get trial function name from id
+/// @param tf Trial function id
+/// @return Trial function name
+const char *tf_name(trial_function_t tf);
 
 /// @brief Get result type from function id
 /// @param tf Trial function numerical id

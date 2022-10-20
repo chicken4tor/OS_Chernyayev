@@ -9,7 +9,7 @@ const char *node_pipe[NODES_COUNT][2] = {
 
 const char *calc_task = "calculon";
 
-// NOTE: order should match enum _trial_functions
+// NOTE: order must match enum _trial_functions
 const char *trial_functions[TF_COUNT] = {
     "imul",
     "imin",
@@ -18,10 +18,10 @@ const char *trial_functions[TF_COUNT] = {
     "or",
 };
 
-// NOTE: order should match enum _trial_functions
+// NOTE: order must match enum _trial_functions
 tf_result_t tf_results[TF_COUNT] = {
     TFR_INT,
-    TFR_INT,
+    TFR_UINT,
     TFR_FLOAT,
     TFR_BOOL,
     TFR_BOOL,
@@ -51,4 +51,14 @@ tf_result_t trial_result_type(trial_function_t tf)
     }
 
     return TFR_UNKNOWN;
+}
+
+const char *tf_name(trial_function_t tf)
+{
+    if (tf != TF_UNKNOWN)
+    {
+        return trial_functions[tf];
+    }
+
+    return NULL;
 }

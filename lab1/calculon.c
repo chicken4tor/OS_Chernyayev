@@ -73,14 +73,14 @@ int main(int argc, char **argv)
             return 0;
         }
 
-        printf("NODE %d: Data ready - %d, X - ", node, retval);
+        // printf("NODE %d: Data ready - %d, X - ", node, retval);
 
         // Process all input values, even if we read more than one integer from named pipe
         for (int i = 0; i < retval / sizeof(int); i++)
         {
             int x = buff[i];
 
-            printf("%d ", x);
+            // printf("%d ", x);
 
             // calculate
             value_t result;
@@ -96,7 +96,7 @@ int main(int argc, char **argv)
                     result.status = trial_f_imul(x, &result.i_val);
                     break;
                 case TF_IMIN:
-                    result.status = trial_f_imin(x, &result.i_val);
+                    result.status = trial_f_imin(x, &result.ui_val);
                     break;
                 case TF_FMUL:
                     result.status = trial_f_fmul(x, &result.d_val);
@@ -116,7 +116,7 @@ int main(int argc, char **argv)
                     result.status = trial_g_imul(x, &result.i_val);
                     break;
                 case TF_IMIN:
-                    result.status = trial_g_imin(x, &result.i_val);
+                    result.status = trial_g_imin(x, &result.ui_val);
                     break;
                 case TF_FMUL:
                     result.status = trial_g_fmul(x, &result.d_val);
@@ -141,9 +141,7 @@ int main(int argc, char **argv)
             }
         }
 
-        printf("\n");
-
-        sleep(1);
+        // printf("\n");
     }
 
     // for (int i = 0; i < 20; i++)

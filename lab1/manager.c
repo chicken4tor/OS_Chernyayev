@@ -10,6 +10,7 @@
 #include <sys/param.h>
 
 #include <compfuncs.h>
+#include <trialfuncs.h>
 
 #include "manager.h"
 #include "shared_data.h"
@@ -44,11 +45,14 @@ struct _manager_state
     input_value_t *x_values;                               // Input queue
     int x_start_pos;                                       // Index of head element in circular input queue
     int x_free_pos;                                        // Index of free element in circular input queue
-    int output_type[NODES_COUNT];                          // Output value type
+    trial_function_t trial_function[NODES_COUNT];          // Trial function
+    tf_result_t output_type[NODES_COUNT];                  // Output value type
     calculated_value_t *intermediate_results[NODES_COUNT]; // Output values from computational nodes
     int intermediate_start_pos[NODES_COUNT];               // Index of head element in computational queue
     int intermediate_free_pos[NODES_COUNT];                // Index of free element in computational queue
 };
+
+static char node_name[NODES_COUNT] = {'f', 'g'};
 
 manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_func, const char *g_func)
 {
@@ -137,6 +141,16 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
         return NULL;
     }
 
+    // Know your trial function
+
+    mgr->trial_function[F_NODE] = function_from_name(f_func);
+    mgr->trial_function[G_NODE] = function_from_name(g_func);
+
+    for (int i = 0; i < NODES_COUNT; i++)
+    {
+        mgr->output_type[i] = trial_result_type(mgr->trial_function[i]);
+    }
+
     return mgr;
 }
 
@@ -182,7 +196,7 @@ bool communicate(manager_state_t *mgr)
     struct timeval io_timeout;
 
     io_timeout.tv_sec = 30;
-    io_timeout.tv_usec = /*5*/00000; // .5 sec interval
+    io_timeout.tv_usec = /*5*/ 00000; // .5 sec interval
 
     sel_result = select(mgr->nfds, &data_streams, NULL, NULL, &io_timeout);
 
@@ -197,7 +211,7 @@ bool communicate(manager_state_t *mgr)
         return true;
     }
 
-    printf("manager: select - %d\n", sel_result);
+    // printf("manager: select - %d\n", sel_result);
 
     // Get input value, and send it to sub-processes
     if (FD_ISSET(mgr->input_fd[NODES_COUNT], &data_streams))
@@ -216,7 +230,7 @@ bool communicate(manager_state_t *mgr)
         }
         else
         {
-            printf("Read %ld - %ld, %s", value, result, buff);
+            // printf("Read %ld - %ld, %s", value, result, buff);
 
             // Send X to calculators
             input_value_t x;
@@ -246,9 +260,41 @@ bool communicate(manager_state_t *mgr)
     {
         if (FD_ISSET(mgr->input_fd[i], &data_streams))
         {
-            char buff[READ_BUFF];
-            ssize_t result = read(mgr->input_fd[i], buff, sizeof(buff));
-            printf("read from %d, %ld\n", i, result);
+            value_t val[10];
+            ssize_t result = read(mgr->input_fd[i], val, sizeof(val));
+
+            if (result <= 0)
+            {
+                fprintf(stderr, "COMM failed %d\n", i);
+                return false;
+            }
+
+            for (int j = 0; j < result / sizeof(value_t); j++)
+            {
+                printf("trial_%c_%s %s", node_name[i], tf_name(mgr->output_type[i]), symbolic_status(val[j].status));
+                if (val[j].status == COMPFUNC_SUCCESS)
+                {
+                    printf("<");
+                    // Print actual value
+                    switch (mgr->output_type[i])
+                    {
+                    case TFR_INT:
+                        print_int_value(val->i_val);
+                        break;
+                    case TFR_UINT:
+                        print_unsigned_int_value(val->ui_val);
+                        break;
+                    case TFR_FLOAT:
+                        print_double_value(val->d_val);
+                        break;
+                    case TFR_BOOL:
+                        print__Bool_value(val->b_val);
+                        break;
+                    }
+                    printf(">");
+                }
+                printf("\n");
+            }
         }
     }
 
