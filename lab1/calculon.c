@@ -3,10 +3,17 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include<signal.h>
 
 #include <trialfuncs.h>
 
 #include "shared_data.h"
+
+
+void handle_interrupt()
+{
+    // Bypass, handled in parent process
+}
 
 int main(int argc, char **argv)
 {
@@ -55,6 +62,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "Failed to open result named pipe - %s\n", node_pipe[node][1]);
         return 1;
     }
+
+    // Process interrupt will be handled by parent
+    signal(SIGINT, handle_interrupt);
 
     // listen for input
     int buff[256];
