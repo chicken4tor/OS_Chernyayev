@@ -62,6 +62,7 @@ struct _manager_state
     trial_function_t trial_function[NODES_COUNT]; // Trial function
     tf_result_t output_type[NODES_COUNT];         // Output value type
     trial_function_t final_function;              // Final operation
+    bool shutdown;                                // No more input values
 };
 
 static char node_name[NODES_COUNT] = {'f', 'g'};
@@ -162,6 +163,8 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
     // Final function
     mgr->final_function = function_from_name(final_func);
 
+    mgr->shutdown = false;
+
     return mgr;
 }
 
@@ -195,7 +198,8 @@ bool communicate(manager_state_t *mgr)
     FD_ZERO(&data_streams);
 
     // X values and results data streams
-    for (int i = 0; i <= NODES_COUNT; i++)
+    int input_limit = mgr->shutdown ? NODES_COUNT :NODES_COUNT + 1;
+    for (int i = 0; i < input_limit; i++)
     {
         FD_SET(mgr->input_fd[i], &data_streams);
         nfds = MAX(nfds, mgr->input_fd[i]);
@@ -218,8 +222,8 @@ bool communicate(manager_state_t *mgr)
 
     struct timeval io_timeout;
 
-    io_timeout.tv_sec = 30;
-    io_timeout.tv_usec = 0;
+    io_timeout.tv_sec = 0;
+    io_timeout.tv_usec = 250000;
 
     sel_result = select(nfds + 1, &data_streams, &out_streams, NULL, &io_timeout);
 
@@ -338,6 +342,80 @@ bool communicate(manager_state_t *mgr)
     return true;
 }
 
+void shutdown(manager_state_t *mgr)
+{
+    mgr->shutdown = true;
+}
+
+value_t cast_value(const value_t *src, tf_result_t from, tf_result_t to)
+{
+    value_t result = {0};
+
+    result.status = src->status;
+
+    switch (from)
+    {
+    case TFR_INT:
+        switch (to)
+        {
+        case TFR_UINT:
+            result.ui_val = src->i_val;
+            break;
+        case TFR_FLOAT:
+            result.d_val = src->i_val;
+            break;
+        case TFR_BOOL:
+            result.b_val = src->i_val;
+            break;
+        }
+        break;
+    case TFR_UINT:
+        switch (to)
+        {
+        case TFR_INT:
+            result.i_val = src->ui_val;
+            break;
+        case TFR_FLOAT:
+            result.d_val = src->ui_val;
+            break;
+        case TFR_BOOL:
+            result.b_val = src->ui_val;
+            break;
+        }
+        break;
+    case TFR_FLOAT:
+        switch (to)
+        {
+        case TFR_INT:
+            result.i_val = src->d_val;
+            break;
+        case TFR_UINT:
+            result.ui_val = src->d_val;
+            break;
+        case TFR_BOOL:
+            result.b_val = src->d_val;
+            break;
+        }
+        break;
+    case TFR_BOOL:
+        switch (to)
+        {
+        case TFR_INT:
+            result.i_val = src->b_val;
+            break;
+        case TFR_UINT:
+            result.ui_val = src->b_val;
+            break;
+        case TFR_FLOAT:
+            result.d_val = src->b_val;
+            break;
+        }
+        break;
+    }
+
+    return result;
+}
+
 bool final_calculation(manager_state_t *mgr)
 {
     // Check for data availability
@@ -352,7 +430,7 @@ bool final_calculation(manager_state_t *mgr)
         {
             if (current->result[i].comm == CS_RECEIVED)
             {
-                if (current->result[i].value.status == COMPFUNC_SOFT_FAIL && current->result[i].soft_retry < MAX_SOFT_RETRY)
+                if (current->result[i].value.status == COMPFUNC_SOFT_FAIL && current->result[i].soft_retry < MAX_SOFT_RETRY && !mgr->shutdown)
                 {
                     // Retry calculation
                     current->result[i].soft_retry++;
@@ -381,32 +459,134 @@ bool final_calculation(manager_state_t *mgr)
     int upper_limit = mgr->x_current_pos;
     if (mgr->x_head_pos > mgr->x_current_pos)
     {
-        // 
+        //
         upper_limit += mgr->max_count;
     }
 
+    tf_result_t final_type = trial_result_type(mgr->final_function);
+
     for (int i = mgr->x_head_pos; i < upper_limit; i++)
     {
-        printf("calc %d\n", mgr->x_values[i % mgr->max_count].value);
+        printf("Final expression for %d ", mgr->x_values[i % mgr->max_count].value);
+
         value_t arg1;
+
+        if (mgr->output_type[0] != final_type)
+        {
+            arg1 = cast_value(&mgr->x_values[i % mgr->max_count].result[0].value, mgr->output_type[0], final_type);
+        }
+        else
+        {
+            arg1 = mgr->x_values[i % mgr->max_count].result[0].value;
+        }
+
         value_t arg2;
+
+        if (mgr->output_type[1] != final_type)
+        {
+            arg2 = cast_value(&mgr->x_values[i % mgr->max_count].result[1].value, mgr->output_type[1], final_type);
+        }
+        else
+        {
+            arg2 = mgr->x_values[i % mgr->max_count].result[1].value;
+        }
 
         // Calculate
         switch (mgr->final_function)
         {
         case TF_IMUL:
+            if (arg1.status == COMPFUNC_SUCCESS && arg2.status == COMPFUNC_SUCCESS)
+            {
+                print_int_value(arg1.i_val * arg2.i_val);
+            }
+            else
+            {
+                printf("calculation failed");
+            }
             break;
         case TF_IMIN:
+            if (arg1.status == COMPFUNC_SUCCESS && arg2.status == COMPFUNC_SUCCESS)
+            {
+                print_unsigned_int_value(MIN(arg1.ui_val, arg2.ui_val));
+            }
+            else
+            {
+                printf("calculation failed");
+            }
             break;
         case TF_FMUL:
+            if (arg1.status == COMPFUNC_SUCCESS && arg2.status == COMPFUNC_SUCCESS)
+            {
+                print_double_value(arg1.d_val * arg2.d_val);
+            }
+            else
+            {
+                printf("calculation failed");
+            }
             break;
         case TF_AND:
-            // False if one of args is False
+            if (arg1.status == COMPFUNC_SUCCESS && arg2.status == COMPFUNC_SUCCESS)
+            {
+                print__Bool_value(arg1.d_val && arg2.d_val);
+            }
+            else
+            {
+                bool partial_eval = false;
+
+                if (arg1.status == COMPFUNC_SUCCESS)
+                {
+                    partial_eval = !arg1.b_val;
+                }
+                else if (arg2.status == COMPFUNC_SUCCESS)
+                {
+                    partial_eval = !arg2.b_val;
+                }
+
+                // False if one of args is False
+                if (partial_eval)
+                {
+                    print__Bool_value(false);
+                }
+                else
+                {
+                    printf("calculation failed");
+                }
+            }
+
             break;
         case TF_OR:
-            // True if one of args is True
+            if (arg1.status == COMPFUNC_SUCCESS && arg2.status == COMPFUNC_SUCCESS)
+            {
+                print__Bool_value(arg1.d_val || arg2.d_val);
+            }
+            else
+            {
+                bool partial_eval = false;
+
+                if (arg1.status == COMPFUNC_SUCCESS)
+                {
+                    partial_eval = arg1.b_val;
+                }
+                else if (arg2.status == COMPFUNC_SUCCESS)
+                {
+                    partial_eval = arg2.b_val;
+                }
+
+                // True if one of args is True
+                if (partial_eval)
+                {
+                    print__Bool_value(true);
+                }
+                else
+                {
+                    printf("calculation failed");
+                }
+            }
+
             break;
         }
+
+        printf("\n");
 
         mgr->x_head_pos = (mgr->x_head_pos + 1) % mgr->max_count;
     }

@@ -4,8 +4,9 @@
 #include <unistd.h>
 
 #include "manager.h"
+#include "shared_data.h"
 
-const int COMM_BUFFER = 10;
+const int COMM_BUFFER = 100;
 
 volatile sig_atomic_t cultural_canceling = 0;
 
@@ -18,13 +19,26 @@ int main(int argc, char **argv)
 {
     printf("OS Lab 1\n");
 
+    if (argc != 4)
+    {
+        printf("app usage:  manager <f_function> <g_function> <final_operation>\n"
+        "supported functions and operation: imul, imin, fmul, and, or\n" );
+        return 1;
+    }
+
+    // Validate function names
+    for (int i = 1; i < argc; i++)
+    {
+        if (function_from_name(argv[i]) == TF_UNKNOWN)
+        {
+            printf("Unsupported function/operation: %d - %s\n", i, argv[i]);
+            return 1;
+        }
+    }
+
     signal(SIGINT, handle_interrupt);
 
-    const char *g_func = "imul";
-    const char *f_func = "imin";
-    const char *final_func = "or";
-
-    manager_state_t *mgr = construct_manager(STDIN_FILENO, COMM_BUFFER, g_func, f_func, final_func);
+    manager_state_t *mgr = construct_manager(STDIN_FILENO, COMM_BUFFER, argv[1], argv[2], argv[3]);
 
     if (mgr == NULL)
     {
@@ -77,8 +91,9 @@ int main(int argc, char **argv)
             }
             else
             {
-                /// @todo Drain input queue
-                // communicate(mgr, false /* No new input*/)
+                shutdown(mgr);
+                communicate(mgr);
+                final_calculation(mgr);
                 break;
             }
         }

@@ -38,4 +38,8 @@ bool communicate(manager_state_t *mgr);
 /// @return True, on success
 bool final_calculation(manager_state_t *mgr);
 
+/// @brief Shutdown connection
+/// @param mgr Manager instance
+void shutdown(manager_state_t *mgr);
+
 #endif // __MANAGER_INC__
