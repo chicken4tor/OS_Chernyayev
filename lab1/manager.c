@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <spawn.h>
 #include <sys/param.h>
+#include <memory.h>
 
 #include <compfuncs.h>
 #include <trialfuncs.h>
@@ -18,38 +19,45 @@
 const int NAMED_PIPE_MODE = S_IFIFO | 0640;
 const int READ_BUFF = 1024;
 
-struct _input_value
+enum _comm_status
 {
-    int value;
-    compfunc_status_t g_status;
-    compfunc_status_t f_status;
+    CS_NONE,
+    CS_SENT,
+    CS_RECEIVED,
 };
 
-typedef struct _input_value input_value_t;
+/// @brief Is data send over named pipe, is response received?
+typedef enum _comm_status comm_status_t;
 
 struct _calculated_value
 {
-    compfunc_status_t status; /// Operation status
+    comm_status_t comm;
     value_t value;
 };
 
+/// @brief Calculated value and relates states
 typedef struct _calculated_value calculated_value_t;
+
+struct _input_value
+{
+    int value;
+    calculated_value_t result[NODES_COUNT];
+};
+
+/// @brief Input value and calculated results
+typedef struct _input_value input_value_t;
 
 struct _manager_state
 {
-    pid_t comp_nodes[NODES_COUNT];                         // Reference to processes for computation
-    int comm_fd[NODES_COUNT];                              // File descriptors for communication channels
-    int input_fd[NODES_COUNT + 1];                         // File descriptors for results communication channels, extra space for input stream
-    int nfds;                                              // Maximal file descriptor + 1 for select call
-    int max_count;                                         // Size of communication buffers
-    input_value_t *x_values;                               // Input queue
-    int x_start_pos;                                       // Index of head element in circular input queue
-    int x_free_pos;                                        // Index of free element in circular input queue
-    trial_function_t trial_function[NODES_COUNT];          // Trial function
-    tf_result_t output_type[NODES_COUNT];                  // Output value type
-    calculated_value_t *intermediate_results[NODES_COUNT]; // Output values from computational nodes
-    int intermediate_start_pos[NODES_COUNT];               // Index of head element in computational queue
-    int intermediate_free_pos[NODES_COUNT];                // Index of free element in computational queue
+    pid_t comp_nodes[NODES_COUNT];                // Reference to processes for computation
+    int comm_fd[NODES_COUNT];                     // File descriptors for communication channels
+    int input_fd[NODES_COUNT + 1];                // File descriptors for results communication channels, extra space for input stream
+    int max_count;                                // Size of communication buffers
+    input_value_t *x_values;                      // Input and results queue
+    int x_start_pos;                              // Index of head element in circular input queue
+    int x_free_pos;                               // Index of free element in circular input queue
+    trial_function_t trial_function[NODES_COUNT]; // Trial function
+    tf_result_t output_type[NODES_COUNT];         // Output value type
 };
 
 static char node_name[NODES_COUNT] = {'f', 'g'};
@@ -69,13 +77,6 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
     mgr->x_values = malloc(sizeof(input_value_t) * buffer_size);
     mgr->x_start_pos = 0;
     mgr->x_free_pos = 0;
-
-    for (int i = 0; i < NODES_COUNT; i++)
-    {
-        mgr->intermediate_results[i] = malloc(sizeof(calculated_value_t) * buffer_size);
-        mgr->intermediate_start_pos[i] = 0;
-        mgr->intermediate_free_pos[i] = 0;
-    }
 
     // Launch computation processes, at first
     int status;
@@ -125,19 +126,22 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
 
     mgr->input_fd[NODES_COUNT] = input_fd;
 
-    // Find maximal file descriptor
-    mgr->nfds = mgr->input_fd[0];
+    // Find maximal file descriptor, to check select system call requirements
+    int nfds = mgr->input_fd[0];
 
     for (int i = 1; i <= NODES_COUNT; i++)
     {
-        mgr->nfds = MAX(mgr->nfds, mgr->input_fd[i]);
+        nfds = MAX(nfds, mgr->input_fd[i]);
     }
 
-    mgr->nfds++;
-
-    if (mgr->nfds > FD_SETSIZE)
+    for (int i = 0; i < NODES_COUNT; i++)
     {
-        printf("HUGE file descriptor - %d\n", mgr->nfds - 1);
+        nfds = MAX(nfds, mgr->comm_fd[i]);
+    }
+
+    if (nfds >= FD_SETSIZE)
+    {
+        printf("HUGE file descriptor - %d, upgrade to poll(2)\n", nfds);
         return NULL;
     }
 
@@ -158,14 +162,6 @@ void destruct_manager(manager_state_t *mgr)
 {
     /// @todo Sync computation queues
 
-    // Free buffers
-    free(mgr->x_values);
-
-    for (int i = 0; i < NODES_COUNT; i++)
-    {
-        free(mgr->intermediate_results[i]);
-    }
-
     // Close file descriptors
     for (int i = 0; i < NODES_COUNT; i++)
     {
@@ -175,12 +171,18 @@ void destruct_manager(manager_state_t *mgr)
         remove(node_pipe[i][1]);
     }
 
+    // Free buffers
+    free(mgr->x_values);
+
     free(mgr);
 }
 
 bool communicate(manager_state_t *mgr)
 {
     fd_set data_streams;
+    fd_set out_streams;
+
+    int nfds = -1; // Maximal file descriptor
 
     // Input set
     FD_ZERO(&data_streams);
@@ -189,6 +191,20 @@ bool communicate(manager_state_t *mgr)
     for (int i = 0; i <= NODES_COUNT; i++)
     {
         FD_SET(mgr->input_fd[i], &data_streams);
+        nfds = MAX(nfds, mgr->input_fd[i]);
+    }
+
+    // Send params to workers streams
+    FD_ZERO(&out_streams);
+
+    for (int i = 0; i < NODES_COUNT; i++)
+    {
+        // Is write operation expected
+        if (mgr->x_start_pos != mgr->x_free_pos && mgr->x_values[mgr->x_start_pos].result[i].comm == CS_NONE)
+        {
+            FD_SET(mgr->comm_fd[i], &out_streams);
+            nfds = MAX(nfds, mgr->comm_fd[i]);
+        }
     }
 
     int sel_result;
@@ -196,9 +212,9 @@ bool communicate(manager_state_t *mgr)
     struct timeval io_timeout;
 
     io_timeout.tv_sec = 30;
-    io_timeout.tv_usec = /*5*/ 00000; // .5 sec interval
+    io_timeout.tv_usec = 0;
 
-    sel_result = select(mgr->nfds, &data_streams, NULL, NULL, &io_timeout);
+    sel_result = select(nfds + 1, &data_streams, &out_streams, NULL, &io_timeout);
 
     if (sel_result == -1)
     {
@@ -223,7 +239,7 @@ bool communicate(manager_state_t *mgr)
 
     // printf("manager: select - %d\n", sel_result);
 
-    // Get input value, and send it to sub-processes
+    // Get input value, add it to queue
     if (FD_ISSET(mgr->input_fd[NODES_COUNT], &data_streams))
     {
         // Assumption: Data is read by lines, one X value per line
@@ -242,25 +258,9 @@ bool communicate(manager_state_t *mgr)
         {
             // printf("Read %ld - %ld, %s", value, result, buff);
 
-            // Send X to calculators
-            input_value_t x;
-
-            x.value = (int)value;
-            x.f_status = COMPFUNC_STATUS_MAX;
-            x.f_status = COMPFUNC_STATUS_MAX;
-
-            for (int i = 0; i < NODES_COUNT; i++)
-            {
-                int result = write(mgr->comm_fd[i], &x.value, sizeof(x.value));
-                if (result == -1)
-                {
-                    // write operation failed
-                    return false;
-                }
-            }
-
             // Add value to queue
-            mgr->x_values[mgr->x_free_pos] = x;
+            memset(&mgr->x_values[mgr->x_free_pos], 0, sizeof(mgr->x_values[0]));
+            mgr->x_values[mgr->x_free_pos].value = (int)value;
             mgr->x_free_pos = (mgr->x_free_pos + 1) % mgr->max_count;
         }
     }
@@ -273,38 +273,58 @@ bool communicate(manager_state_t *mgr)
             value_t val[10];
             ssize_t result = read(mgr->input_fd[i], val, sizeof(val));
 
-            if (result <= 0)
+            // Current implementation is limited to 1 result value from named pipe
+            if (result <= 0 || result > sizeof(val))
             {
-                fprintf(stderr, "COMM failed %d\n", i);
+                fprintf(stderr, "COMM failed %d: %lu\n", i, result);
                 return false;
             }
 
             for (int j = 0; j < result / sizeof(value_t); j++)
             {
-                printf("trial_%c_%s %s", node_name[i], tf_name(mgr->output_type[i]), symbolic_status(val[j].status));
-                if (val[j].status == COMPFUNC_SUCCESS)
+                input_value_t *current = &mgr->x_values[mgr->x_start_pos];
+                calculated_value_t *res_val = &current->result[i];
+                res_val->comm = CS_RECEIVED;
+                res_val->value = val[j];
+                printf("trial_%c_%s(%d) %s", node_name[i], tf_name(mgr->output_type[i]), current->value, symbolic_status(res_val->value.status));
+                if (res_val->value.status == COMPFUNC_SUCCESS)
                 {
                     printf("<");
                     // Print actual value
                     switch (mgr->output_type[i])
                     {
                     case TFR_INT:
-                        print_int_value(val->i_val);
+                        print_int_value(res_val->value.i_val);
                         break;
                     case TFR_UINT:
-                        print_unsigned_int_value(val->ui_val);
+                        print_unsigned_int_value(res_val->value.ui_val);
                         break;
                     case TFR_FLOAT:
-                        print_double_value(val->d_val);
+                        print_double_value(res_val->value.d_val);
                         break;
                     case TFR_BOOL:
-                        print__Bool_value(val->b_val);
+                        print__Bool_value(res_val->value.b_val);
                         break;
                     }
                     printf(">");
                 }
                 printf("\n");
             }
+        }
+    }
+
+    // Send X to calculators
+    for (int i = 0; i < NODES_COUNT; i++)
+    {
+        if (FD_ISSET(mgr->comm_fd[i], &out_streams))
+        {
+            int result = write(mgr->comm_fd[i], &mgr->x_values[mgr->x_start_pos].value, sizeof(mgr->x_values[mgr->x_start_pos].value));
+            if (result == -1)
+            {
+                // write operation failed
+                return false;
+            }
+            mgr->x_values[mgr->x_start_pos].result[i].comm = CS_SENT;
         }
     }
 

@@ -3,7 +3,17 @@
 
 #include <stdbool.h>
 
-/// @brief Encapsulate manager data in this structure
+/// @brief Encapsulate manager data in this structure.
+///
+/// Responsibility:
+///   - create named pipes
+///   - spawn processes
+///   - get x
+///   - send x to f
+///   - send x to g
+///   - get response from f
+///   - get response from g
+///   - calculate f*g, send result
 typedef struct _manager_state manager_state_t;
 
 /// @brief Initialize Inter-Process-Communication, spawn children

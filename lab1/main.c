@@ -22,14 +22,11 @@ int main(int argc, char **argv)
 
     manager_state_t *mgr = construct_manager(STDIN_FILENO, COMM_BUFFER, "imul", "imin");
 
-    // create named pipes
-    // spawn processes
-    // get x
-    // send x to f
-    // send x to g
-    // get response from f
-    // get response from g
-    // calculate f*g, send result
+    if (mgr == NULL)
+    {
+        fprintf(stderr, "Something goes wrong\n");
+        return 1;
+    }
 
     while (1)
     {
@@ -76,6 +73,8 @@ int main(int argc, char **argv)
             }
             else
             {
+                /// @todo Drain input queue
+                // communicate(mgr, false /* No new input*/)
                 break;
             }
         }

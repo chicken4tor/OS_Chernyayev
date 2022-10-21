@@ -12,7 +12,7 @@
 
 void handle_interrupt()
 {
-    // Bypass, handled in parent process
+    // Bypass, handled by parent process
 }
 
 int main(int argc, char **argv)
@@ -63,7 +63,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // Process interrupt will be handled by parent
+    // Process interrupt is handled by parent
     signal(SIGINT, handle_interrupt);
 
     // listen for input
