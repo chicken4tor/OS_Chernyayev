@@ -20,7 +20,11 @@ int main(int argc, char **argv)
 
     signal(SIGINT, handle_interrupt);
 
-    manager_state_t *mgr = construct_manager(STDIN_FILENO, COMM_BUFFER, "imul", "imin");
+    const char *g_func = "imul";
+    const char *f_func = "imin";
+    const char *final_func = "or";
+
+    manager_state_t *mgr = construct_manager(STDIN_FILENO, COMM_BUFFER, g_func, f_func, final_func);
 
     if (mgr == NULL)
     {
@@ -84,6 +88,8 @@ int main(int argc, char **argv)
             fprintf(stderr, "mgr: failure in communication\n");
             break;
         }
+
+        final_calculation(mgr);
     }
 
     // perform cleanup...

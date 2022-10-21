@@ -18,6 +18,7 @@
 
 const int NAMED_PIPE_MODE = S_IFIFO | 0640;
 const int READ_BUFF = 1024;
+const int MAX_SOFT_RETRY = 10;
 
 enum _comm_status
 {
@@ -32,6 +33,7 @@ typedef enum _comm_status comm_status_t;
 struct _calculated_value
 {
     comm_status_t comm;
+    int soft_retry; // Retry counter, shouldn't exceed MAX_SOFT_RETRY
     value_t value;
 };
 
@@ -54,15 +56,17 @@ struct _manager_state
     int input_fd[NODES_COUNT + 1];                // File descriptors for results communication channels, extra space for input stream
     int max_count;                                // Size of communication buffers
     input_value_t *x_values;                      // Input and results queue
-    int x_start_pos;                              // Index of head element in circular input queue
+    int x_head_pos;                               // Index of calculated element in circular input queue
+    int x_current_pos;                            // Index of current value for calculation
     int x_free_pos;                               // Index of free element in circular input queue
     trial_function_t trial_function[NODES_COUNT]; // Trial function
     tf_result_t output_type[NODES_COUNT];         // Output value type
+    trial_function_t final_function;              // Final operation
 };
 
 static char node_name[NODES_COUNT] = {'f', 'g'};
 
-manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_func, const char *g_func)
+manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_func, const char *g_func, const char *final_func)
 {
     manager_state_t *mgr = malloc(sizeof(manager_state_t));
 
@@ -75,7 +79,8 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
     // Allocate buffers
     mgr->max_count = buffer_size;
     mgr->x_values = malloc(sizeof(input_value_t) * buffer_size);
-    mgr->x_start_pos = 0;
+    mgr->x_head_pos = 0;
+    mgr->x_current_pos = 0;
     mgr->x_free_pos = 0;
 
     // Launch computation processes, at first
@@ -146,7 +151,6 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
     }
 
     // Know your trial function
-
     mgr->trial_function[F_NODE] = function_from_name(f_func);
     mgr->trial_function[G_NODE] = function_from_name(g_func);
 
@@ -154,6 +158,9 @@ manager_state_t *construct_manager(int input_fd, int buffer_size, const char *f_
     {
         mgr->output_type[i] = trial_result_type(mgr->trial_function[i]);
     }
+
+    // Final function
+    mgr->final_function = function_from_name(final_func);
 
     return mgr;
 }
@@ -200,7 +207,7 @@ bool communicate(manager_state_t *mgr)
     for (int i = 0; i < NODES_COUNT; i++)
     {
         // Is write operation expected
-        if (mgr->x_start_pos != mgr->x_free_pos && mgr->x_values[mgr->x_start_pos].result[i].comm == CS_NONE)
+        if (mgr->x_current_pos != mgr->x_free_pos && mgr->x_values[mgr->x_current_pos].result[i].comm == CS_NONE)
         {
             FD_SET(mgr->comm_fd[i], &out_streams);
             nfds = MAX(nfds, mgr->comm_fd[i]);
@@ -282,7 +289,7 @@ bool communicate(manager_state_t *mgr)
 
             for (int j = 0; j < result / sizeof(value_t); j++)
             {
-                input_value_t *current = &mgr->x_values[mgr->x_start_pos];
+                input_value_t *current = &mgr->x_values[mgr->x_current_pos];
                 calculated_value_t *res_val = &current->result[i];
                 res_val->comm = CS_RECEIVED;
                 res_val->value = val[j];
@@ -318,14 +325,90 @@ bool communicate(manager_state_t *mgr)
     {
         if (FD_ISSET(mgr->comm_fd[i], &out_streams))
         {
-            int result = write(mgr->comm_fd[i], &mgr->x_values[mgr->x_start_pos].value, sizeof(mgr->x_values[mgr->x_start_pos].value));
+            int result = write(mgr->comm_fd[i], &mgr->x_values[mgr->x_current_pos].value, sizeof(mgr->x_values[mgr->x_current_pos].value));
             if (result == -1)
             {
                 // write operation failed
                 return false;
             }
-            mgr->x_values[mgr->x_start_pos].result[i].comm = CS_SENT;
+            mgr->x_values[mgr->x_current_pos].result[i].comm = CS_SENT;
         }
+    }
+
+    return true;
+}
+
+bool final_calculation(manager_state_t *mgr)
+{
+    // Check for data availability
+    if (mgr->x_current_pos != mgr->x_free_pos)
+    {
+        // Values in transmission
+        input_value_t *current = &mgr->x_values[mgr->x_current_pos];
+
+        bool avail = true;
+
+        for (int i = 0; i < NODES_COUNT; i++)
+        {
+            if (current->result[i].comm == CS_RECEIVED)
+            {
+                if (current->result[i].value.status == COMPFUNC_SOFT_FAIL && current->result[i].soft_retry < MAX_SOFT_RETRY)
+                {
+                    // Retry calculation
+                    current->result[i].soft_retry++;
+                    current->result[i].comm = CS_NONE;
+                    avail = false;
+                    printf("Retry soft fail - trial_%c_%s(%d)\n", node_name[i], tf_name(mgr->trial_function[i]), current->value);
+                }
+            }
+            else
+            {
+                avail = false;
+            }
+        }
+
+        if (!avail)
+        {
+            // Not all data available
+            return false;
+        }
+
+        // Shift data pointer
+        mgr->x_current_pos = (mgr->x_current_pos + 1) % mgr->max_count;
+    }
+
+    // Calculate results
+    int upper_limit = mgr->x_current_pos;
+    if (mgr->x_head_pos > mgr->x_current_pos)
+    {
+        // 
+        upper_limit += mgr->max_count;
+    }
+
+    for (int i = mgr->x_head_pos; i < upper_limit; i++)
+    {
+        printf("calc %d\n", mgr->x_values[i % mgr->max_count].value);
+        value_t arg1;
+        value_t arg2;
+
+        // Calculate
+        switch (mgr->final_function)
+        {
+        case TF_IMUL:
+            break;
+        case TF_IMIN:
+            break;
+        case TF_FMUL:
+            break;
+        case TF_AND:
+            // False if one of args is False
+            break;
+        case TF_OR:
+            // True if one of args is True
+            break;
+        }
+
+        mgr->x_head_pos = (mgr->x_head_pos + 1) % mgr->max_count;
     }
 
     return true;
