@@ -202,8 +202,18 @@ bool communicate(manager_state_t *mgr)
 
     if (sel_result == -1)
     {
-        /// @todo report error
-        return false;
+        int err = errno;
+
+        if (err == EINTR)
+        {
+            // Interrupted by user
+            return true;
+        }
+        else
+        {
+            /// @todo report error
+            return false;
+        }
     }
     else if (sel_result == 0)
     {

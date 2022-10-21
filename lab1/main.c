@@ -76,16 +76,19 @@ int main(int argc, char **argv)
             }
             else
             {
-                // perform cleanup...
-                destruct_manager(mgr);
-
-                return 0;
+                break;
             }
         }
 
-        communicate(mgr);
+        if (!communicate(mgr))
+        {
+            fprintf(stderr, "mgr: failure in communication\n");
+            break;
+        }
     }
 
-    // Unreachable branch
-    return 1;
+    // perform cleanup...
+    destruct_manager(mgr);
+
+    return 0;
 }
