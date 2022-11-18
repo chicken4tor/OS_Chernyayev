@@ -1,3 +1,5 @@
+package com.ontko.moss;
+
 // Run() is called from Scheduling.main() and is where
 // the scheduling algorithm written by the user resides.
 // User modification should occur within the Run() function.

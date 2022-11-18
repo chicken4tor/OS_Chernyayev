@@ -1,3 +1,5 @@
+package com.ontko.moss;
+
 public class Results {
   public String schedulingType;
   public String schedulingName;
